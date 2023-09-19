@@ -1,2 +1,5 @@
 ebin
 .eunit
+_build
+/rebar3
+rebar.lock
