@@ -161,7 +161,7 @@ digest(Element, HashFunction) ->
 %% Will throw badmatch errors if you give it XML that is not signed
 %% according to the xml-dsig spec. If you're using something other
 %% than rsa+sha1 or sha256 this will asplode. Don't say I didn't warn you.
--spec verify(Element :: #xmlElement{}, Fingerprints :: [fingerprint()] | any) -> ok | {error, bad_digest | bad_signature | cert_not_accepted}.
+-spec verify(Element :: #xmlElement{}, Fingerprints :: [fingerprint()]) -> ok | {error, bad_digest | bad_signature | cert_not_accepted}.
 verify(Element, Fingerprints) ->
     DsNs = [{"ds", 'http://www.w3.org/2000/09/xmldsig#'},
         {"ec", 'http://www.w3.org/2001/10/xml-exc-c14n#'}],
@@ -201,13 +201,13 @@ verify(Element, Fingerprints) ->
         CertHash2 = crypto:hash(sha256, CertBin),
 
         Cert = public_key:pkix_decode_cert(CertBin, plain),
-        {_, KeyBin} = Cert#'Certificate'.tbsCertificate#'TBSCertificate'.subjectPublicKeyInfo#'SubjectPublicKeyInfo'.subjectPublicKey,
+        KeyBin = Cert#'Certificate'.tbsCertificate#'TBSCertificate'.subjectPublicKeyInfo#'SubjectPublicKeyInfo'.subjectPublicKey,
         Key = public_key:pem_entry_decode({'RSAPublicKey', KeyBin, not_encrypted}),
 
         case public_key:verify(Data, HashFunction, Sig, Key) of
             true ->
                 case Fingerprints of
-                    any ->
+                    [] ->
                         ok;
                     _ ->
                         case lists:any(fun(X) -> lists:member(X, Fingerprints) end, [CertHash, {sha,CertHash}, {sha256,CertHash2}]) of
