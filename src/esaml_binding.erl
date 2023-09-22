@@ -15,6 +15,7 @@
 -define(deflate, <<"urn:oasis:names:tc:SAML:2.0:bindings:URL-Encoding:DEFLATE">>).
 
 -type uri() :: binary() | string().
+-type hex_uri() :: string() | binary().
 -type html_doc() :: binary().
 -type xml() :: #xmlElement{} | #xmlDocument{}.
 
@@ -57,8 +58,8 @@ decode_response(_, SAMLResponse) ->
 encode_http_redirect(IdpTarget, SignedXml, RelayState) ->
     Type = xml_payload_type(SignedXml),
 	Req = lists:flatten(xmerl:export([SignedXml], xmerl_xml)),
-    Param = uri_string:encode(base64:encode_to_string(zlib:zip(Req))),
-    RelayStateEsc = uri_string:encode(binary_to_list(RelayState)),
+    Param = uri_encode(base64:encode_to_string(zlib:zip(Req))),
+    RelayStateEsc = uri_encode(binary_to_list(RelayState)),
     FirstParamDelimiter = case lists:member($?, IdpTarget) of true -> "&"; false -> "?" end,
     iolist_to_binary([IdpTarget, FirstParamDelimiter, "SAMLEncoding=", ?deflate, "&", Type, "=", Param, "&RelayState=", RelayStateEsc]).
 
@@ -95,3 +96,54 @@ generate_post_html(Type, Dest, Req, RelayState) ->
 -include_lib("eunit/include/eunit.hrl").
 
 -endif.
+
+%% @doc Encode URI.
+-spec uri_encode(uri()) -> hex_uri().
+uri_encode(URI) when is_list(URI) ->
+    lists:append([do_uri_encode(Char) || Char <- URI]);
+uri_encode(URI) when is_binary(URI) ->
+    << <<(do_uri_encode_binary(Char))/binary>> || <<Char>> <= URI >>.
+
+do_uri_encode(Char) ->
+    case reserved(Char) of
+	    true ->
+	        [ $% | integer_to_hexlist(Char)];
+	    false ->
+	        [Char]
+    end.
+
+do_uri_encode_binary(Char) ->
+    case reserved(Char)  of
+        true ->
+            << $%, (integer_to_binary(Char, 16))/binary >>;
+        false ->
+            <<Char>>
+    end.
+
+reserved($;) -> true;
+reserved($:) -> true;
+reserved($@) -> true;
+reserved($&) -> true;
+reserved($=) -> true;
+reserved($+) -> true;
+reserved($,) -> true;
+reserved($/) -> true;
+reserved($?) -> true;
+reserved($#) -> true;
+reserved($[) -> true;
+reserved($]) -> true;
+reserved($<) -> true;
+reserved($>) -> true;
+reserved($\") -> true;
+reserved(${) -> true;
+reserved($}) -> true;
+reserved($|) -> true;
+reserved($\\) -> true;
+reserved($') -> true;
+reserved($^) -> true;
+reserved($%) -> true;
+reserved($\s) -> true;
+reserved(_) -> false.
+
+integer_to_hexlist(Int) ->
+    integer_to_list(Int, 16).
