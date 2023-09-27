@@ -400,7 +400,8 @@ to_xml(#esaml_authnreq{version = V, issue_instant = Time, destination = Dest, is
             #xmlElement{name = 'saml:Issuer', content = [#xmlText{value = Issuer}]},
             #xmlElement{name = 'saml:Subject', content = [
                 #xmlElement{name = 'saml:SubjectConfirmation', attributes = [#xmlAttribute{name = 'Method', value = "urn:oasis:names:tc:SAML:2.0:cm:bearer"}]}
-            ]}
+            ]},
+            #xmlElement{name = 'samlp:NameIDPolicy', attributes = [#xmlAttribute{name = 'Format', value = "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"}]}
         ]
     });
 
