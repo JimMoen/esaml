@@ -398,9 +398,14 @@ to_xml(#esaml_authnreq{version = V, issue_instant = Time, destination = Dest, is
                       #xmlAttribute{name = 'ProtocolBinding', value = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"}],
         content = [
             #xmlElement{name = 'saml:Issuer', content = [#xmlText{value = Issuer}]},
-            #xmlElement{name = 'saml:Subject', content = [
-                #xmlElement{name = 'saml:SubjectConfirmation', attributes = [#xmlAttribute{name = 'Method', value = "urn:oasis:names:tc:SAML:2.0:cm:bearer"}]}
-            ]},
+            %% This should not be included in the request for Azure Entra ID
+            %% https://learn.microsoft.com/en-us/azure/active-directory/develop/single-sign-on-saml-protocol#subject
+            %% #xmlElement{name = 'saml:Subject', content = [
+            %%     #xmlElement{name = 'saml:SubjectConfirmation', attributes = [#xmlAttribute{name = 'Method', value = "urn:oasis:names:tc:SAML:2.0:cm:bearer"}]}
+            %% ]},
+            %% This is required for Okta Signed Requests
+            %% https://help.okta.com/oie/en-us/content/topics/apps/aiw-saml-reference.htm
+            %% When Signed Requests is enabled, the SAML Request must include a NameIDPolicy.
             #xmlElement{name = 'samlp:NameIDPolicy', attributes = [#xmlAttribute{name = 'Format', value = "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"}]}
         ]
     });
