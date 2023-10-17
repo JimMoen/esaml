@@ -65,11 +65,9 @@ sign(ElementIn, PrivateKey = #'RSAPrivateKey'{}, CertBin, SigMethod) when is_bin
             case lists:keyfind('id', 2, ElementStrip#xmlElement.attributes) of
                 #xmlAttribute{value = LowId} -> {ElementStrip, LowId};
                 _ ->
-                    NewId = uuid:uuid_to_string(uuid:get_v4()),
-                    Attr = #xmlAttribute{name = 'ID', value = NewId, namespace = #xmlNamespace{}},
-                    NewAttrs = [Attr | ElementStrip#xmlElement.attributes],
-                    Elem = ElementStrip#xmlElement{attributes = NewAttrs},
-                    {Elem, NewId}
+                    NewElemWithID = #xmlElement{attributes = NewAttrs} = esaml_util:add_xml_id(ElementStrip),
+                    #xmlAttribute{value = NewId} = lists:keyfind('ID', 2, NewAttrs),
+                    {NewElemWithID, NewId}
             end
     end,
 

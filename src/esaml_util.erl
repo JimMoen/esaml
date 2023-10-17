@@ -14,11 +14,14 @@
 -include("esaml.hrl").
 
 -export([datetime_to_saml/1, saml_to_datetime/1]).
+-export([add_xml_id/1]).
 -export([start_ets/0, check_dupe_ets/2]).
 -export([folduntil/3, thread/2, threaduntil/2]).
 -export([build_nsinfo/2]).
 -export([load_private_key/1, load_certificate_chain/1, load_certificate/1, load_metadata/2, load_metadata/1]).
 -export([convert_fingerprints/1]).
+
+-type xml() :: #xmlElement{} | #xmlDocument{}.
 
 %% @doc Converts various ascii hex/base64 fingerprint formats to binary
 -spec convert_fingerprints([string() | binary()]) -> [binary()].
@@ -53,6 +56,14 @@ convert_fingerprints(FPs) ->
 datetime_to_saml(Time) ->
     {{Y,Mo,D}, {H, Mi, S}} = Time,
     lists:flatten(io_lib:format("~4.10.0B-~2.10.0B-~2.10.0BT~2.10.0B:~2.10.0B:~2.10.0BZ", [Y, Mo, D, H, Mi, S])).
+
+%% @doc Add saml XML id to the element
+-spec add_xml_id(xml()) -> xml().
+add_xml_id(Xml = #xmlElement{attributes = Attributes}) ->
+    IdAttr = #xmlAttribute{name = 'ID',
+                           value = "id" ++ uuid:uuid_to_string(uuid:get_v4()),
+                           namespace = #xmlNamespace{}},
+    Xml#xmlElement{attributes = [IdAttr | Attributes]}.
 
 %% @doc Converts a SAML time string into a calendar:datetime()
 %%

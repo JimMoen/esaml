@@ -21,15 +21,6 @@
 -type dupe_fun() :: fun((esaml:assertion(), Digest :: binary()) -> ok | term()).
 -export_type([dupe_fun/0]).
 
-%% @private
--spec add_xml_id(xml()) -> xml().
-add_xml_id(Xml) ->
-    Xml#xmlElement{attributes = Xml#xmlElement.attributes ++ [
-        #xmlAttribute{name = 'ID',
-            value = "id" ++ uuid:uuid_to_string(uuid:get_v4()),
-            namespace = #xmlNamespace{}}
-        ]}.
-
 %% @doc Return an AuthnRequest as an XML element
 -spec generate_authn_request(IdpURL :: string(), esaml:sp()) -> #xmlElement{}.
 generate_authn_request(IdpURL, SP = #esaml_sp{metadata_uri = MetaURI, consume_uri = ConsumeURI}) ->
@@ -43,7 +34,7 @@ generate_authn_request(IdpURL, SP = #esaml_sp{metadata_uri = MetaURI, consume_ur
     if SP#esaml_sp.sp_sign_requests ->
         xmerl_dsig:sign(Xml, SP#esaml_sp.key, SP#esaml_sp.certificate);
     true ->
-        add_xml_id(Xml)
+        esaml_util:add_xml_id(Xml)
     end.
 
 %% @doc Return a LogoutRequest as an XML element
@@ -60,7 +51,7 @@ generate_logout_request(IdpURL, NameID, SP = #esaml_sp{metadata_uri = MetaURI}) 
     if SP#esaml_sp.sp_sign_requests ->
         xmerl_dsig:sign(Xml, SP#esaml_sp.key, SP#esaml_sp.certificate);
     true ->
-        add_xml_id(Xml)
+        esaml_util:add_xml_id(Xml)
     end.
 
 %% @doc Return a LogoutResponse as an XML element
@@ -76,7 +67,7 @@ generate_logout_response(IdpURL, Status, SP = #esaml_sp{metadata_uri = MetaURI})
     if SP#esaml_sp.sp_sign_requests ->
         xmerl_dsig:sign(Xml, SP#esaml_sp.key, SP#esaml_sp.certificate);
     true ->
-        add_xml_id(Xml)
+        esaml_util:add_xml_id(Xml)
     end.
 
 %% @doc Return the SP metadata as an XML element
@@ -95,7 +86,7 @@ generate_metadata(SP = #esaml_sp{org = Org, tech = Tech}) ->
     if SP#esaml_sp.sp_sign_metadata ->
         xmerl_dsig:sign(Xml, SP#esaml_sp.key, SP#esaml_sp.certificate);
     true ->
-        add_xml_id(Xml)
+        esaml_util:add_xml_id(Xml)
     end.
 
 %% @doc Initialize and validate an esaml_sp record
