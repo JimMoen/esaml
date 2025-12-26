@@ -188,7 +188,7 @@ verify(Element, Fingerprints) ->
     true ->
         [SigInfo] = xmerl_xpath:string("ds:Signature/ds:SignedInfo", Element, [{namespace, DsNs}]),
         SigInfoCanon = xmerl_c14n:c14n(SigInfo),
-        Data = list_to_binary(SigInfoCanon),
+        Data = unicode:characters_to_binary(SigInfoCanon, unicode, utf8),
 
         [#xmlText{value = Sig64}] = xmerl_xpath:string("ds:Signature//ds:SignatureValue/text()", Element, [{namespace, DsNs}]),
         Sig = base64:decode(Sig64),
