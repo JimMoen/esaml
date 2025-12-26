@@ -189,21 +189,24 @@ validate_assertion(Xml, DuplicateFun, SP = #esaml_sp{}) ->
     Ns = [{"samlp", 'urn:oasis:names:tc:SAML:2.0:protocol'},
           {"saml", 'urn:oasis:names:tc:SAML:2.0:assertion'}],
     esaml_util:threaduntil([
+        % Step 1: Verify envelope signature on the full Response element
+        fun(X) ->
+            if SP#esaml_sp.idp_signs_envelopes ->
+                case xmerl_dsig:verify(X, SP#esaml_sp.trusted_fingerprints) of
+                    ok -> X;
+                    OuterError -> {error, {envelope, OuterError}}
+                end;
+            true -> X
+            end
+        end,
+        % Step 2: Extract Assertion from Response
         fun(X) ->
             case xmerl_xpath:string("/samlp:Response/saml:Assertion", X, [{namespace, Ns}]) of
                 [A] -> A;
                 _ -> {error, bad_assertion}
             end
         end,
-        fun(A) ->
-            if SP#esaml_sp.idp_signs_envelopes ->
-                case xmerl_dsig:verify(A, SP#esaml_sp.trusted_fingerprints) of
-                    ok -> A;
-                    OuterError -> {error, {envelope, OuterError}}
-                end;
-            true -> A
-            end
-        end,
+        % Step 3: Verify assertion signature on the Assertion element
         fun(A) ->
             if SP#esaml_sp.idp_signs_assertions ->
                 case xmerl_dsig:verify(A, SP#esaml_sp.trusted_fingerprints) of
@@ -213,6 +216,7 @@ validate_assertion(Xml, DuplicateFun, SP = #esaml_sp{}) ->
             true -> A
             end
         end,
+        % Step 4: Verify assertion validity
         fun(A) ->
             case esaml:validate_assertion(A, SP#esaml_sp.consume_uri, SP#esaml_sp.metadata_uri) of
                 {ok, AR} -> AR;
