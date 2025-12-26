@@ -24,6 +24,25 @@
 -type xml() :: #xmlElement{} | #xmlDocument{}.
 
 %% @doc Converts various ascii hex/base64 fingerprint formats to binary
+%%
+%% A certificate fingerprint is a cryptographic hash (SHA-1, SHA-256, etc.)
+%% of the DER-encoded certificate. This function accepts fingerprints in
+%% multiple common formats and converts them to a normalized form.
+%%
+%% Supported input formats:
+%% - Binary: `<<198,86,10,...>>` - returned as-is
+%% - Hex with colons: `"c6:56:0a:b6:77:f1:14:03:..."` - converted to binary
+%% - Tagged base64: `"SHA256:base64string=="` - converted to `{sha256, binary()}`
+%%
+%% Example:
+%% ```
+%% % Get fingerprint from a certificate
+%% CertBin = base64:decode(CertFromXML),
+%% Fingerprint = crypto:hash(sha256, CertBin),
+%%
+%% % Or use a hex string
+%% convert_fingerprints(["c6:56:0a:b6:77:f1:14:03:c6:58:23:2a:91:4c:fb:71"]).
+%% '''
 -spec convert_fingerprints([string() | binary()]) -> [binary()].
 convert_fingerprints(FPs) ->
     FPSources = FPs ++ esaml:config(trusted_fingerprints, []),

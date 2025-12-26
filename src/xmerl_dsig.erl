@@ -28,7 +28,7 @@
 -type xml_thing() :: #xmlDocument{} | #xmlElement{} | #xmlAttribute{} | #xmlPI{} | #xmlText{} | #xmlComment{}.
 -type sig_method() :: rsa_sha1 | rsa_sha256.
 -type sig_method_uri() :: string().
--type fingerprint() :: binary() | {sha | sha256, binary()}.
+-type fingerprint() :: binary() | {md5 | sha | sha256 | sha384 | sha512, binary()}.
 
 %% @doc Returns an xmlelement without any ds:Signature elements that are inside it.
 -spec strip(Element :: #xmlElement{} | #xmlDocument{}) -> #xmlElement{}.
@@ -154,7 +154,21 @@ digest(Element, HashFunction) ->
 %% @doc Verifies an XML digital signature on the given element.
 %%
 %% Fingerprints is a list of valid cert fingerprints that can be
-%% accepted.
+%% accepted. Each fingerprint must be a cryptographic HASH of the certificate,
+%% not the certificate itself.
+%%
+%% Supported fingerprint formats:
+%% - Raw binary hash: `<<198,86,10,...>>` (16 bytes for MD5, 20 for SHA-1, 32 for SHA-256, 48 for SHA-384, 64 for SHA-512)
+%% - Tagged hash: `{md5, <<...>>}`, `{sha, <<...>>}`, `{sha256, <<...>>}`, `{sha384, <<...>>}`, or `{sha512, <<...>>}`
+%%
+%% The function only computes hashes for algorithms present in the Fingerprints list,
+%% minimizing unnecessary cryptographic operations.
+%%
+%% To compute a fingerprint from a certificate:
+%% ```
+%% CertBin = base64:decode(CertificateFromXML),
+%% Fingerprint = crypto:hash(sha256, CertBin).
+%% '''
 %%
 %% Will throw badmatch errors if you give it XML that is not signed
 %% according to the xml-dsig spec. If you're using something other
@@ -195,8 +209,6 @@ verify(Element, Fingerprints) ->
 
         [#xmlText{value = Cert64}] = xmerl_xpath:string("ds:Signature//ds:X509Certificate/text()", Element, [{namespace, DsNs}]),
         CertBin = base64:decode(Cert64),
-        CertHash = crypto:hash(sha, CertBin),
-        CertHash2 = crypto:hash(sha256, CertBin),
 
         Cert = public_key:pkix_decode_cert(CertBin, plain),
         KeyBin = Cert#'Certificate'.tbsCertificate#'TBSCertificate'.subjectPublicKeyInfo#'SubjectPublicKeyInfo'.subjectPublicKey,
@@ -204,17 +216,7 @@ verify(Element, Fingerprints) ->
 
         case public_key:verify(Data, HashFunction, Sig, Key) of
             true ->
-                case Fingerprints of
-                    [] ->
-                        ok;
-                    _ ->
-                        case lists:any(fun(X) -> lists:member(X, Fingerprints) end, [CertHash, {sha,CertHash}, {sha256,CertHash2}]) of
-                            true ->
-                                ok;
-                            false ->
-                                {error, cert_not_accepted}
-                        end
-                end;
+                verify_fingerprints(Fingerprints, CertBin);
             false ->
                 {error, bad_signature}
         end
@@ -243,6 +245,49 @@ signature_props(rsa_sha256) ->
     DigestMethod = "http://www.w3.org/2001/04/xmlenc#sha256",
     Url = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
     {HashFunction, DigestMethod, Url}.
+
+%% @private
+%% @doc Verifies that the certificate matches one of the trusted fingerprints.
+%%
+%% This function:
+%% 1. Determines which hash algorithms are needed based on the fingerprints list
+%% 2. Computes only those certificate hashes (optimization)
+%% 3. Checks if any computed hash matches the trusted fingerprints
+-spec verify_fingerprints([fingerprint()] | any | [], binary()) -> ok | {error, cert_not_accepted}.
+verify_fingerprints(any, _CertBin) ->
+    ok;
+verify_fingerprints([], _CertBin) ->
+    ok;
+verify_fingerprints(Fingerprints, CertBin) ->
+    % Determine which hash algorithms we need based on Fingerprints
+    NeededAlgos = lists:usort(lists:flatmap(fun
+        ({Algo, _Hash}) when is_atom(Algo) ->
+            % Tagged fingerprint: we know the exact algorithm
+            [Algo];
+        (BinHash) when is_binary(BinHash) ->
+            % Raw binary: determine possible algorithms based on size
+            case byte_size(BinHash) of
+                16 -> [md5];
+                20 -> [sha];      % SHA-1
+                32 -> [sha256];
+                48 -> [sha384];
+                64 -> [sha512];
+                _  -> []
+            end
+    end, Fingerprints)),
+
+    % Compute only the hashes we actually need
+    CertHashes = lists:flatmap(fun(Algo) ->
+        Hash = crypto:hash(Algo, CertBin),
+        % Return both raw binary and tagged tuple format
+        [Hash, {Algo, Hash}]
+    end, NeededAlgos),
+
+    % Check if any computed hash matches the trusted fingerprints
+    case lists:any(fun(X) -> lists:member(X, Fingerprints) end, CertHashes) of
+        true -> ok;
+        false -> {error, cert_not_accepted}
+    end.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
