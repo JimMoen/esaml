@@ -212,8 +212,15 @@ c14n(Elem = #xmlElement{}, KnownNSIn, ActiveNSIn, Comments, InclNs, Acc) ->
             [atom_to_list(Elem#xmlElement.name), "<" | Acc]
     end,
     % xmlns definitions
+    % Only declare the default namespace if:
+    % 1. The element uses the default namespace (no prefix in nsinfo), AND
+    % 2. The default namespace is different from the parent's default namespace
+    ElementUsesDefaultNs = case Elem#xmlElement.nsinfo of
+        {_, _} -> false;  % Element has a prefix, doesn't use default namespace
+        _ -> true         % Element has no prefix, uses default namespace
+    end,
     {Acc2, FinalActiveNS} = if
-        not (Default =:= []) andalso not (Default =:= ParentDefault) ->
+        ElementUsesDefaultNs andalso not (Default =:= []) andalso not (Default =:= ParentDefault) ->
             {["\"", xml_safe_string(Default, true), " xmlns=\"" | Acc1], [{default, Default} | NewActiveNS]};
         not (Default =:= []) ->
             {Acc1, [{default, Default} | NewActiveNS]};
