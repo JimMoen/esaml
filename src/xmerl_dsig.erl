@@ -123,7 +123,46 @@ sign(ElementIn, PrivateKey = #'RSAPrivateKey'{}, CertBin, SigMethod) when is_bin
         ]
     }),
 
-    Element#xmlElement{content = [SigElem | Element#xmlElement.content]}.
+    % Insert Signature after Issuer element (SAML schema requires Issuer before Signature)
+    NewContent = insert_signature_after_issuer(SigElem, Element#xmlElement.content),
+    Element#xmlElement{content = NewContent}.
+
+%% @private
+%% @doc Inserts Signature element after the Issuer element per SAML schema requirements.
+%% SAML 2.0 schema defines element order as: Issuer, Signature, Extensions, ...
+%% If no Issuer is found, prepends the Signature (fallback for non-SAML use).
+insert_signature_after_issuer(SigElem, Content) ->
+    insert_signature_after_issuer(SigElem, Content, []).
+
+insert_signature_after_issuer(SigElem, [], Acc) ->
+    % No Issuer found, prepend Signature (fallback)
+    [SigElem | lists:reverse(Acc)];
+insert_signature_after_issuer(SigElem, [Elem = #xmlElement{name = Name} | Rest], Acc) ->
+    case is_issuer_element(Name) of
+        true ->
+            % Found Issuer, insert Signature right after it
+            lists:reverse(Acc) ++ [Elem, SigElem | Rest];
+        false ->
+            insert_signature_after_issuer(SigElem, Rest, [Elem | Acc])
+    end;
+insert_signature_after_issuer(SigElem, [Other | Rest], Acc) ->
+    insert_signature_after_issuer(SigElem, Rest, [Other | Acc]).
+
+%% @private
+%% @doc Checks if element name is an Issuer element (with or without namespace prefix).
+is_issuer_element('saml:Issuer') -> true;
+is_issuer_element('Issuer') -> true;
+is_issuer_element(Name) when is_atom(Name) ->
+    case atom_to_list(Name) of
+        "Issuer" -> true;
+        _ ->
+            % Handle any namespace prefix (e.g., 'saml2:Issuer')
+            case lists:reverse(atom_to_list(Name)) of
+                "reussI:" ++ _ -> true;  % ends with :Issuer (reversed)
+                _ -> false
+            end
+    end;
+is_issuer_element(_) -> false.
 
 %% @doc Returns the canonical digest of an (optionally signed) element
 %%
