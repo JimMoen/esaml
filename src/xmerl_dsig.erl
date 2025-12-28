@@ -498,4 +498,81 @@ utf8_test() ->
     [#xmlText{value = TextValue}] = xmerl_xpath:string("x:name/text()", SignedXml, [{namespace, Ns}]),
     ok = verify(SignedXml, [crypto:hash(sha, CertBin)]).
 
+%% Test fingerprint verification with different hash algorithms
+%% This is the fix for 969a66a: support md5, sha384, sha512 algorithms
+verify_fingerprint_md5_test() ->
+    {Doc, _} = xmerl_scan:string("<x:foo id=\"test\" xmlns:x=\"urn:foo:x:\"><x:name>blah</x:name></x:foo>", [{namespace_conformant, true}]),
+    {Key, CertBin} = test_sign_key(),
+    SignedXml = sign(Doc, Key, CertBin),
+    % Verify with MD5 fingerprint (tagged)
+    Md5Hash = crypto:hash(md5, CertBin),
+    ok = verify(SignedXml, [{md5, Md5Hash}]),
+    % Verify with raw MD5 binary (16 bytes)
+    ok = verify(SignedXml, [Md5Hash]).
+
+verify_fingerprint_sha384_test() ->
+    {Doc, _} = xmerl_scan:string("<x:foo id=\"test\" xmlns:x=\"urn:foo:x:\"><x:name>blah</x:name></x:foo>", [{namespace_conformant, true}]),
+    {Key, CertBin} = test_sign_key(),
+    SignedXml = sign(Doc, Key, CertBin),
+    % Verify with SHA-384 fingerprint (tagged)
+    Sha384Hash = crypto:hash(sha384, CertBin),
+    ok = verify(SignedXml, [{sha384, Sha384Hash}]),
+    % Verify with raw SHA-384 binary (48 bytes)
+    ok = verify(SignedXml, [Sha384Hash]).
+
+verify_fingerprint_sha512_test() ->
+    {Doc, _} = xmerl_scan:string("<x:foo id=\"test\" xmlns:x=\"urn:foo:x:\"><x:name>blah</x:name></x:foo>", [{namespace_conformant, true}]),
+    {Key, CertBin} = test_sign_key(),
+    SignedXml = sign(Doc, Key, CertBin),
+    % Verify with SHA-512 fingerprint (tagged)
+    Sha512Hash = crypto:hash(sha512, CertBin),
+    ok = verify(SignedXml, [{sha512, Sha512Hash}]),
+    % Verify with raw SHA-512 binary (64 bytes)
+    ok = verify(SignedXml, [Sha512Hash]).
+
+%% Test that only needed hashes are computed (optimization)
+verify_fingerprint_optimization_test() ->
+    {Doc, _} = xmerl_scan:string("<x:foo id=\"test\" xmlns:x=\"urn:foo:x:\"><x:name>blah</x:name></x:foo>", [{namespace_conformant, true}]),
+    {Key, CertBin} = test_sign_key(),
+    SignedXml = sign(Doc, Key, CertBin),
+    % Mixed fingerprints should work
+    Sha1Hash = crypto:hash(sha, CertBin),
+    Sha512Hash = crypto:hash(sha512, CertBin),
+    ok = verify(SignedXml, [Sha1Hash, {sha512, Sha512Hash}]),
+    % Wrong fingerprint should fail
+    WrongHash = crypto:hash(sha256, <<"wrong">>),
+    {error, cert_not_accepted} = verify(SignedXml, [WrongHash]).
+
+%% Test that Signature element is inserted after Issuer element
+%% This is the fix for d8d1664: insert Signature after Issuer per SAML schema
+sign_element_order_test() ->
+    % Create a SAML-like document with Issuer element
+    {Doc, _} = xmerl_scan:string("<samlp:AuthnRequest xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\"><saml:Issuer>https://sp.example.com</saml:Issuer><samlp:NameIDPolicy/></samlp:AuthnRequest>", [{namespace_conformant, true}]),
+    {Key, CertBin} = test_sign_key(),
+    SignedXml = sign(Doc, Key, CertBin),
+    % Get element order
+    Content = SignedXml#xmlElement.content,
+    Names = [case E of #xmlElement{name = N} -> N; _ -> other end || E <- Content],
+    % Issuer should come before Signature
+    IssuerPos = find_position('saml:Issuer', Names),
+    SigPos = find_position('ds:Signature', Names),
+    true = (IssuerPos < SigPos),
+    % Verify the signature still works
+    ok = verify(SignedXml, [crypto:hash(sha, CertBin)]).
+
+%% Test that Signature is prepended when no Issuer exists (fallback)
+sign_element_order_no_issuer_test() ->
+    {Doc, _} = xmerl_scan:string("<x:foo id=\"test\" xmlns:x=\"urn:foo:x:\"><x:name>blah</x:name></x:foo>", [{namespace_conformant, true}]),
+    {Key, CertBin} = test_sign_key(),
+    SignedXml = sign(Doc, Key, CertBin),
+    % Signature should be first when no Issuer
+    [#xmlElement{name = 'ds:Signature'} | _] = SignedXml#xmlElement.content,
+    ok = verify(SignedXml, [crypto:hash(sha, CertBin)]).
+
+find_position(Name, List) ->
+    find_position(Name, List, 1).
+find_position(_, [], _) -> 0;
+find_position(Name, [Name | _], Pos) -> Pos;
+find_position(Name, [_ | Rest], Pos) -> find_position(Name, Rest, Pos + 1).
+
 -endif.

@@ -377,4 +377,23 @@ c14n_inclns_test() ->
     Target2 = "<foo:a xmlns:bar=\"urn:bar:\" xmlns:foo=\"urn:foo:\"><foo:b bar:nothing=\"something\">foo</foo:b></foo:a>",
     Target2 = c14n(Doc, false, ["bar"]).
 
+%% Test that prefixed elements don't get unnecessary default namespace declarations
+%% This is the fix for f8bc5a0: no default namespace when element has nsinfo
+prefixed_element_no_default_ns_test() ->
+    % Test case: prefixed element inside element with default namespace
+    % The prefixed element should NOT get xmlns="" declaration
+    {Doc, _} = xmerl_scan:string("<root xmlns=\"urn:default:\"><prefix:child xmlns:prefix=\"urn:prefix:\">text</prefix:child></root>", [{namespace_conformant, true}]),
+    Result = c14n(Doc, false),
+    % prefix:child should NOT have xmlns="" - it uses a prefix, not default namespace
+    Expected = "<root xmlns=\"urn:default:\"><prefix:child xmlns:prefix=\"urn:prefix:\">text</prefix:child></root>",
+    Expected = Result.
+
+%% Test SAML-like structure where dsig:Signature (prefixed) is inside default namespace element
+prefixed_signature_no_default_ns_test() ->
+    {Doc, _} = xmerl_scan:string("<Response xmlns=\"urn:oasis:names:tc:SAML:2.0:protocol\"><dsig:Signature xmlns:dsig=\"http://www.w3.org/2000/09/xmldsig#\"><dsig:SignedInfo>data</dsig:SignedInfo></dsig:Signature></Response>", [{namespace_conformant, true}]),
+    Result = c14n(Doc, false),
+    % dsig:Signature should NOT have xmlns="" - it uses dsig: prefix
+    Expected = "<Response xmlns=\"urn:oasis:names:tc:SAML:2.0:protocol\"><dsig:Signature xmlns:dsig=\"http://www.w3.org/2000/09/xmldsig#\"><dsig:SignedInfo>data</dsig:SignedInfo></dsig:Signature></Response>",
+    Expected = Result.
+
 -endif.
