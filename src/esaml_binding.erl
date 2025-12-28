@@ -13,6 +13,7 @@
 
 -include_lib("xmerl/include/xmerl.hrl").
 -define(deflate, <<"urn:oasis:names:tc:SAML:2.0:bindings:URL-Encoding:DEFLATE">>).
+-define(XML_PROLOG, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").
 
 -type uri() :: binary() | string().
 -type hex_uri() :: string() | binary().
@@ -57,7 +58,7 @@ decode_response(_, SAMLResponse) ->
 -spec encode_http_redirect(IDPTarget :: uri(), SignedXml :: xml(), RelayState :: binary()) -> uri().
 encode_http_redirect(IdpTarget, SignedXml, RelayState) ->
     Type = xml_payload_type(SignedXml),
-	Req = lists:flatten(xmerl:export([SignedXml], xmerl_xml)),
+	Req = lists:flatten(xmerl:export([SignedXml], xmerl_xml, [{prolog, ?XML_PROLOG}])),
     Param = uri_encode(base64:encode_to_string(zlib:zip(Req))),
     RelayStateEsc = uri_encode(binary_to_list(RelayState)),
     FirstParamDelimiter = case lists:member($?, IdpTarget) of true -> "&"; false -> "?" end,
@@ -70,7 +71,7 @@ encode_http_redirect(IdpTarget, SignedXml, RelayState) ->
 -spec encode_http_post(IDPTarget :: uri(), SignedXml :: xml(), RelayState :: binary()) -> html_doc().
 encode_http_post(IdpTarget, SignedXml, RelayState) ->
     Type = xml_payload_type(SignedXml),
-	Req = lists:flatten(xmerl:export([SignedXml], xmerl_xml)),
+	Req = lists:flatten(xmerl:export([SignedXml], xmerl_xml, [{prolog, ?XML_PROLOG}])),
     generate_post_html(Type, IdpTarget, base64:encode(Req), RelayState).
 
 generate_post_html(Type, Dest, Req, RelayState) ->
