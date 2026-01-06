@@ -28,7 +28,7 @@
 -type xml_thing() :: #xmlDocument{} | #xmlElement{} | #xmlAttribute{} | #xmlPI{} | #xmlText{} | #xmlComment{}.
 -type sig_method() :: rsa_sha1 | rsa_sha256.
 -type sig_method_uri() :: string().
--type fingerprint() :: binary() | {sha | sha256, binary()}.
+-type fingerprint() :: binary() | {md5 | sha | sha256 | sha384 | sha512, binary()}.
 
 %% @doc Returns an xmlelement without any ds:Signature elements that are inside it.
 -spec strip(Element :: #xmlElement{} | #xmlDocument{}) -> #xmlElement{}.
@@ -38,9 +38,13 @@ strip(#xmlDocument{content = Kids} = Doc) ->
 
 strip(#xmlElement{content = Kids} = Elem) ->
     NewKids = lists:filter(fun(Kid) ->
-        case xmerl_c14n:canon_name(Kid) of
-            "http://www.w3.org/2000/09/xmldsig#Signature" -> false;
-            _Name -> true
+        case Kid of
+            #xmlElement{} ->
+                case xmerl_c14n:canon_name(Kid) of
+                    "http://www.w3.org/2000/09/xmldsig#Signature" -> false;
+                    _ -> true
+                end;
+            _ -> true  % Keep non-element nodes (text, comments, etc.)
         end
     end, Kids),
     Elem#xmlElement{content = NewKids}.
@@ -123,7 +127,46 @@ sign(ElementIn, PrivateKey = #'RSAPrivateKey'{}, CertBin, SigMethod) when is_bin
         ]
     }),
 
-    Element#xmlElement{content = [SigElem | Element#xmlElement.content]}.
+    % Insert Signature after Issuer element (SAML schema requires Issuer before Signature)
+    NewContent = insert_signature_after_issuer(SigElem, Element#xmlElement.content),
+    Element#xmlElement{content = NewContent}.
+
+%% @private
+%% @doc Inserts Signature element after the Issuer element per SAML schema requirements.
+%% SAML 2.0 schema defines element order as: Issuer, Signature, Extensions, ...
+%% If no Issuer is found, prepends the Signature (fallback for non-SAML use).
+insert_signature_after_issuer(SigElem, Content) ->
+    insert_signature_after_issuer(SigElem, Content, []).
+
+insert_signature_after_issuer(SigElem, [], Acc) ->
+    % No Issuer found, prepend Signature (fallback)
+    [SigElem | lists:reverse(Acc)];
+insert_signature_after_issuer(SigElem, [Elem = #xmlElement{name = Name} | Rest], Acc) ->
+    case is_issuer_element(Name) of
+        true ->
+            % Found Issuer, insert Signature right after it
+            lists:reverse(Acc) ++ [Elem, SigElem | Rest];
+        false ->
+            insert_signature_after_issuer(SigElem, Rest, [Elem | Acc])
+    end;
+insert_signature_after_issuer(SigElem, [Other | Rest], Acc) ->
+    insert_signature_after_issuer(SigElem, Rest, [Other | Acc]).
+
+%% @private
+%% @doc Checks if element name is an Issuer element (with or without namespace prefix).
+is_issuer_element('saml:Issuer') -> true;
+is_issuer_element('Issuer') -> true;
+is_issuer_element(Name) when is_atom(Name) ->
+    case atom_to_list(Name) of
+        "Issuer" -> true;
+        _ ->
+            % Handle any namespace prefix (e.g., 'saml2:Issuer')
+            case lists:reverse(atom_to_list(Name)) of
+                "reussI:" ++ _ -> true;  % ends with :Issuer (reversed)
+                _ -> false
+            end
+    end;
+is_issuer_element(_) -> false.
 
 %% @doc Returns the canonical digest of an (optionally signed) element
 %%
@@ -154,7 +197,21 @@ digest(Element, HashFunction) ->
 %% @doc Verifies an XML digital signature on the given element.
 %%
 %% Fingerprints is a list of valid cert fingerprints that can be
-%% accepted.
+%% accepted. Each fingerprint must be a cryptographic HASH of the certificate,
+%% not the certificate itself.
+%%
+%% Supported fingerprint formats:
+%% - Raw binary hash: `<<198,86,10,...>>` (16 bytes for MD5, 20 for SHA-1, 32 for SHA-256, 48 for SHA-384, 64 for SHA-512)
+%% - Tagged hash: `{md5, <<...>>}`, `{sha, <<...>>}`, `{sha256, <<...>>}`, `{sha384, <<...>>}`, or `{sha512, <<...>>}`
+%%
+%% The function only computes hashes for algorithms present in the Fingerprints list,
+%% minimizing unnecessary cryptographic operations.
+%%
+%% To compute a fingerprint from a certificate:
+%% ```
+%% CertBin = base64:decode(CertificateFromXML),
+%% Fingerprint = crypto:hash(sha256, CertBin).
+%% '''
 %%
 %% Will throw badmatch errors if you give it XML that is not signed
 %% according to the xml-dsig spec. If you're using something other
@@ -188,15 +245,13 @@ verify(Element, Fingerprints) ->
     true ->
         [SigInfo] = xmerl_xpath:string("ds:Signature/ds:SignedInfo", Element, [{namespace, DsNs}]),
         SigInfoCanon = xmerl_c14n:c14n(SigInfo),
-        Data = list_to_binary(SigInfoCanon),
+        Data = unicode:characters_to_binary(SigInfoCanon, unicode, utf8),
 
         [#xmlText{value = Sig64}] = xmerl_xpath:string("ds:Signature//ds:SignatureValue/text()", Element, [{namespace, DsNs}]),
         Sig = base64:decode(Sig64),
 
         [#xmlText{value = Cert64}] = xmerl_xpath:string("ds:Signature//ds:X509Certificate/text()", Element, [{namespace, DsNs}]),
         CertBin = base64:decode(Cert64),
-        CertHash = crypto:hash(sha, CertBin),
-        CertHash2 = crypto:hash(sha256, CertBin),
 
         Cert = public_key:pkix_decode_cert(CertBin, plain),
         KeyBin = Cert#'Certificate'.tbsCertificate#'TBSCertificate'.subjectPublicKeyInfo#'SubjectPublicKeyInfo'.subjectPublicKey,
@@ -204,17 +259,7 @@ verify(Element, Fingerprints) ->
 
         case public_key:verify(Data, HashFunction, Sig, Key) of
             true ->
-                case Fingerprints of
-                    [] ->
-                        ok;
-                    _ ->
-                        case lists:any(fun(X) -> lists:member(X, Fingerprints) end, [CertHash, {sha,CertHash}, {sha256,CertHash2}]) of
-                            true ->
-                                ok;
-                            false ->
-                                {error, cert_not_accepted}
-                        end
-                end;
+                verify_fingerprints(Fingerprints, CertBin);
             false ->
                 {error, bad_signature}
         end
@@ -243,6 +288,49 @@ signature_props(rsa_sha256) ->
     DigestMethod = "http://www.w3.org/2001/04/xmlenc#sha256",
     Url = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
     {HashFunction, DigestMethod, Url}.
+
+%% @private
+%% @doc Verifies that the certificate matches one of the trusted fingerprints.
+%%
+%% This function:
+%% 1. Determines which hash algorithms are needed based on the fingerprints list
+%% 2. Computes only those certificate hashes (optimization)
+%% 3. Checks if any computed hash matches the trusted fingerprints
+-spec verify_fingerprints([fingerprint()] | any | [], binary()) -> ok | {error, cert_not_accepted}.
+verify_fingerprints(any, _CertBin) ->
+    ok;
+verify_fingerprints([], _CertBin) ->
+    ok;
+verify_fingerprints(Fingerprints, CertBin) ->
+    % Determine which hash algorithms we need based on Fingerprints
+    NeededAlgos = lists:usort(lists:flatmap(fun
+        ({Algo, _Hash}) when is_atom(Algo) ->
+            % Tagged fingerprint: we know the exact algorithm
+            [Algo];
+        (BinHash) when is_binary(BinHash) ->
+            % Raw binary: determine possible algorithms based on size
+            case byte_size(BinHash) of
+                16 -> [md5];
+                20 -> [sha];      % SHA-1
+                32 -> [sha256];
+                48 -> [sha384];
+                64 -> [sha512];
+                _  -> []
+            end
+    end, Fingerprints)),
+
+    % Compute only the hashes we actually need
+    CertHashes = lists:flatmap(fun(Algo) ->
+        Hash = crypto:hash(Algo, CertBin),
+        % Return both raw binary and tagged tuple format
+        [Hash, {Algo, Hash}]
+    end, NeededAlgos),
+
+    % Check if any computed hash matches the trusted fingerprints
+    case lists:any(fun(X) -> lists:member(X, Fingerprints) end, CertHashes) of
+        true -> ok;
+        false -> {error, cert_not_accepted}
+    end.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -413,5 +501,82 @@ utf8_test() ->
     TextValue = unicode:characters_to_list(ThisPerson),
     [#xmlText{value = TextValue}] = xmerl_xpath:string("x:name/text()", SignedXml, [{namespace, Ns}]),
     ok = verify(SignedXml, [crypto:hash(sha, CertBin)]).
+
+%% Test fingerprint verification with different hash algorithms
+%% This is the fix for 969a66a: support md5, sha384, sha512 algorithms
+verify_fingerprint_md5_test() ->
+    {Doc, _} = xmerl_scan:string("<x:foo id=\"test\" xmlns:x=\"urn:foo:x:\"><x:name>blah</x:name></x:foo>", [{namespace_conformant, true}]),
+    {Key, CertBin} = test_sign_key(),
+    SignedXml = sign(Doc, Key, CertBin),
+    % Verify with MD5 fingerprint (tagged)
+    Md5Hash = crypto:hash(md5, CertBin),
+    ok = verify(SignedXml, [{md5, Md5Hash}]),
+    % Verify with raw MD5 binary (16 bytes)
+    ok = verify(SignedXml, [Md5Hash]).
+
+verify_fingerprint_sha384_test() ->
+    {Doc, _} = xmerl_scan:string("<x:foo id=\"test\" xmlns:x=\"urn:foo:x:\"><x:name>blah</x:name></x:foo>", [{namespace_conformant, true}]),
+    {Key, CertBin} = test_sign_key(),
+    SignedXml = sign(Doc, Key, CertBin),
+    % Verify with SHA-384 fingerprint (tagged)
+    Sha384Hash = crypto:hash(sha384, CertBin),
+    ok = verify(SignedXml, [{sha384, Sha384Hash}]),
+    % Verify with raw SHA-384 binary (48 bytes)
+    ok = verify(SignedXml, [Sha384Hash]).
+
+verify_fingerprint_sha512_test() ->
+    {Doc, _} = xmerl_scan:string("<x:foo id=\"test\" xmlns:x=\"urn:foo:x:\"><x:name>blah</x:name></x:foo>", [{namespace_conformant, true}]),
+    {Key, CertBin} = test_sign_key(),
+    SignedXml = sign(Doc, Key, CertBin),
+    % Verify with SHA-512 fingerprint (tagged)
+    Sha512Hash = crypto:hash(sha512, CertBin),
+    ok = verify(SignedXml, [{sha512, Sha512Hash}]),
+    % Verify with raw SHA-512 binary (64 bytes)
+    ok = verify(SignedXml, [Sha512Hash]).
+
+%% Test that only needed hashes are computed (optimization)
+verify_fingerprint_optimization_test() ->
+    {Doc, _} = xmerl_scan:string("<x:foo id=\"test\" xmlns:x=\"urn:foo:x:\"><x:name>blah</x:name></x:foo>", [{namespace_conformant, true}]),
+    {Key, CertBin} = test_sign_key(),
+    SignedXml = sign(Doc, Key, CertBin),
+    % Mixed fingerprints should work
+    Sha1Hash = crypto:hash(sha, CertBin),
+    Sha512Hash = crypto:hash(sha512, CertBin),
+    ok = verify(SignedXml, [Sha1Hash, {sha512, Sha512Hash}]),
+    % Wrong fingerprint should fail
+    WrongHash = crypto:hash(sha256, <<"wrong">>),
+    {error, cert_not_accepted} = verify(SignedXml, [WrongHash]).
+
+%% Test that Signature element is inserted after Issuer element
+%% This is the fix for d8d1664: insert Signature after Issuer per SAML schema
+sign_element_order_test() ->
+    % Create a SAML-like document with Issuer element
+    {Doc, _} = xmerl_scan:string("<samlp:AuthnRequest xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\"><saml:Issuer>https://sp.example.com</saml:Issuer><samlp:NameIDPolicy/></samlp:AuthnRequest>", [{namespace_conformant, true}]),
+    {Key, CertBin} = test_sign_key(),
+    SignedXml = sign(Doc, Key, CertBin),
+    % Get element order
+    Content = SignedXml#xmlElement.content,
+    Names = [case E of #xmlElement{name = N} -> N; _ -> other end || E <- Content],
+    % Issuer should come before Signature
+    IssuerPos = find_position('saml:Issuer', Names),
+    SigPos = find_position('ds:Signature', Names),
+    true = (IssuerPos < SigPos),
+    % Verify the signature still works
+    ok = verify(SignedXml, [crypto:hash(sha, CertBin)]).
+
+%% Test that Signature is prepended when no Issuer exists (fallback)
+sign_element_order_no_issuer_test() ->
+    {Doc, _} = xmerl_scan:string("<x:foo id=\"test\" xmlns:x=\"urn:foo:x:\"><x:name>blah</x:name></x:foo>", [{namespace_conformant, true}]),
+    {Key, CertBin} = test_sign_key(),
+    SignedXml = sign(Doc, Key, CertBin),
+    % Signature should be first when no Issuer
+    [#xmlElement{name = 'ds:Signature'} | _] = SignedXml#xmlElement.content,
+    ok = verify(SignedXml, [crypto:hash(sha, CertBin)]).
+
+find_position(Name, List) ->
+    find_position(Name, List, 1).
+find_position(_, [], _) -> 0;
+find_position(Name, [Name | _], Pos) -> Pos;
+find_position(Name, [_ | Rest], Pos) -> find_position(Name, Rest, Pos + 1).
 
 -endif.

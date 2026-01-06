@@ -29,7 +29,7 @@
 -spec reply_with_authnreq(esaml:sp(), IdPSSOEndpoint :: uri(), RelayState :: binary(), Req) -> {ok, Req}.
 reply_with_authnreq(SP, IDP, RelayState, Req) ->
     SignedXml = SP:generate_authn_request(IDP),
-    reply_with_req(IDP, SignedXml, RelayState, Req).
+    reply_with_req(SP, IDP, SignedXml, RelayState, Req).
 
 %% @doc Reply to a Cowboy request with a LogoutRequest payload
 %%
@@ -38,7 +38,7 @@ reply_with_authnreq(SP, IDP, RelayState, Req) ->
 -spec reply_with_logoutreq(esaml:sp(), IdPSLOEndpoint :: uri(), NameID :: string(), Req) -> {ok, Req}.
 reply_with_logoutreq(SP, IDP, NameID, Req) ->
     SignedXml = SP:generate_logout_request(IDP, NameID),
-    reply_with_req(IDP, SignedXml, <<>>, Req).
+    reply_with_req(SP, IDP, SignedXml, <<>>, Req).
 
 %% @doc Reply to a Cowboy request with a LogoutResponse payload
 %%
@@ -47,14 +47,26 @@ reply_with_logoutreq(SP, IDP, NameID, Req) ->
 -spec reply_with_logoutresp(esaml:sp(), IdPSLOEndpoint :: uri(), esaml:status_code(), RelayState :: binary(), Req) -> {ok, Req}.
 reply_with_logoutresp(SP, IDP, Status, RelayState, Req) ->
     SignedXml = SP:generate_logout_response(IDP, Status),
-    reply_with_req(IDP, SignedXml, RelayState, Req).
+    reply_with_req(SP, IDP, SignedXml, RelayState, Req).
 
 %% @private
-reply_with_req(IDP, SignedXml, RelayState, Req) ->
-    Target = esaml_binding:encode_http_redirect(IDP, SignedXml, RelayState),
+%% For HTTP-Redirect binding, signatures must be in URL params (SigAlg, Signature),
+%% not embedded in the XML. For HTTP-POST binding, use enveloped signature.
+reply_with_req(SP, IDP, SignedXml, RelayState, Req) ->
     {UA, _} = cowboy_req:header(<<"user-agent">>, Req, <<"">>),
     IsIE = not (binary:match(UA, <<"MSIE">>) =:= nomatch),
+    % For HTTP-Redirect binding with signing, use URL params signature
+    Target = case SP#esaml_sp.sp_sign_requests of
+        true ->
+            % Use signed HTTP-Redirect binding (SigAlg + Signature in URL)
+            esaml_binding:encode_http_redirect(IDP, SignedXml, RelayState,
+                                                SP#esaml_sp.key, rsa_sha1);
+        false ->
+            % Unsigned redirect
+            esaml_binding:encode_http_redirect(IDP, SignedXml, RelayState)
+    end,
     if IsIE andalso (byte_size(Target) > 2042) ->
+        % IE has URL length limits, use POST binding instead (enveloped signature is correct for POST)
         Html = esaml_binding:encode_http_post(IDP, SignedXml, RelayState),
         cowboy_req:reply(200, [
             {<<"Cache-Control">>, <<"no-cache">>},

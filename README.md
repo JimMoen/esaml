@@ -97,6 +97,115 @@ More complex configurations, including multiple IdPs, dynamic retrieval of IdP m
 
 The second esaml example, `sp_with_logout` demonstrates the addition endpoints necessary to enable Single Log-out protocol support. It also shows how you can build a bridge from esaml to local application session storage, by generating session cookies for each user that logs in (and storing them in ETS).
 
+### Certificate Fingerprint Verification
+
+esaml validates XML signatures on all IdP responses using the X.509 certificate embedded in the signature. For production use, you should configure trusted certificate fingerprints to prevent man-in-the-middle attacks.
+
+#### What are Certificate Fingerprints?
+
+A certificate fingerprint is a **cryptographic hash** (SHA-1, SHA-256, etc.) of the DER-encoded certificate. It acts as a unique identifier for the certificate and is much shorter than the full certificate.
+
+**Important:** Fingerprints are **hashes of certificates**, not the certificates themselves. You cannot pass raw certificate binaries - they must be hashed first.
+
+#### Obtaining Certificate Fingerprints
+
+To get the fingerprint of your IdP's certificate:
+
+```bash
+# From a PEM certificate file
+openssl x509 -in idp_cert.pem -outform DER | openssl dgst -sha256 -binary | base64
+
+# From a certificate in the IdP metadata
+# Extract the certificate and decode it first, then hash it
+```
+
+#### Configuring Trusted Fingerprints
+
+The `trusted_fingerprints` field in `#esaml_sp{}` accepts certificate hashes in multiple formats. When you call `esaml_sp:setup/1`, it automatically converts them using `esaml_util:convert_fingerprints/1`.
+
+**Supported formats:**
+
+```erlang
+SP = esaml_sp:setup(#esaml_sp{
+    % ... other config ...
+    trusted_fingerprints = [
+        % 1. Raw binary hash
+        % - 16 bytes for MD5
+        % - 20 bytes for SHA-1
+        % - 32 bytes for SHA-256
+        % - 48 bytes for SHA-384
+        % - 64 bytes for SHA-512
+        <<198,86,10,182,119,241,20,3,198,88,35,42,145,76,251,113,52,21,246,156>>,
+
+        % 2. Hex string with colons (will be converted to binary)
+        "c6:56:0a:b6:77:f1:14:03:c6:58:23:2a:91:4c:fb:71:34:15:f6:9c",
+
+        % 3. Tagged base64 (will be converted to {algorithm, binary()} tuple)
+        "SHA256:base64encodedfingerprint==",
+        "SHA1:base64encodedfingerprint==",
+        "SHA384:base64encodedfingerprint==",
+        "SHA512:base64encodedfingerprint==",
+        "MD5:base64encodedfingerprint=="
+    ]
+}).
+```
+
+After `setup/1`, these are normalized to one of these formats for internal use:
+- Raw binary: `<<198,86,10,...>>`
+- Tagged tuple: `{md5, <<...>>}`, `{sha, <<...>>}`, `{sha256, <<...>>}`, `{sha384, <<...>>}`, or `{sha512, <<...>>}`
+
+**To compute a fingerprint:**
+
+```erlang
+% Extract certificate from IdP metadata or response
+CertBin = base64:decode(CertBase64),
+
+% Compute SHA-256 fingerprint (recommended)
+Fingerprint = crypto:hash(sha256, CertBin),
+
+% Or other algorithms:
+% FingerprintSha1   = crypto:hash(sha, CertBin),      % SHA-1 (20 bytes)
+% FingerprintSha384 = crypto:hash(sha384, CertBin),   % SHA-384 (48 bytes)
+% FingerprintSha512 = crypto:hash(sha512, CertBin),   % SHA-512 (64 bytes)
+% FingerprintMd5    = crypto:hash(md5, CertBin).      % MD5 (16 bytes, not recommended)
+```
+
+**Using OpenSSL to get fingerprints:**
+
+```bash
+# Get hex string with colons (can be used directly in trusted_fingerprints)
+openssl x509 -in idp_cert.pem -outform DER | openssl dgst -sha256 | cut -d' ' -f2 | sed 's/\(..\)/\1:/g;s/:$//'
+
+# Or get as Erlang binary format
+openssl x509 -in idp_cert.pem -outform DER | openssl dgst -sha256 -binary | xxd -p -c 256
+```
+
+#### Development vs Production
+
+During development, you can skip fingerprint verification:
+
+```erlang
+% WARNING: Only for development! Accepts any valid certificate
+SP = esaml_sp:setup(#esaml_sp{
+    trusted_fingerprints = []  % Empty list skips fingerprint check
+}).
+```
+
+In production, **always configure trusted fingerprints** to ensure you only accept signatures from your trusted IdP.
+
+#### Verification Process
+
+When verifying a signature, esaml:
+
+1. Extracts the X.509 certificate from the XML signature
+2. Determines which hash algorithms are needed based on your `trusted_fingerprints` list
+3. Computes **only the required hashes** (minimizing unnecessary cryptographic operations)
+4. Checks if any computed hash matches the trusted fingerprints:
+   - Raw binary hashes: MD5 (16 bytes), SHA-1 (20 bytes), SHA-256 (32 bytes), SHA-384 (48 bytes), SHA-512 (64 bytes)
+   - Tagged hashes: `{md5, <<...>>}`, `{sha, <<...>>}`, `{sha256, <<...>>}`, `{sha384, <<...>>}`, `{sha512, <<...>>}`
+
+If no match is found (and the fingerprints list is not empty), verification fails with `{error, cert_not_accepted}`.
+
 ### More advanced usage
 
 You can also tap straight into lower-level APIs in esaml if `esaml_cowboy` doesn't meet your needs. The `esaml_binding` and `esaml_sp` modules are the interface used by `esaml_cowboy` itself, and contain all the basic primitives to generate and parse SAML payloads.
